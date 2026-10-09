@@ -1,0 +1,80 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip project
+        run: |
+          zipfile=$(ls src*.zip 2>/dev/null | head -1)
+          if [ -z "$zipfile" ]; then echo "No src zip uploaded yet"; exit 1; fi
+          echo "Using $zipfile"
+          rm -rf unzipped plate_demo && mkdir -p unzipped
+          unzip -o "$zipfile" -d unzipped
+          pub=$(find unzipped -name pubspec.yaml | head -1)
+          mv "$(dirname "$pub")" plate_demo
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Add Android files
+        working-directory: plate_demo
+        run: |
+          flutter create --platforms=android --project-name plate_demo --org com.apexmobilelabs .
+          rm -f test/widget_test.dart
+          cp android_extras/proguard-rules.pro android/app/
+          sed -i '0,/<application/s//<uses-permission android:name="android.permission.CAMERA"\/>\n    <uses-permission android:name="android.permission.VIBRATE"\/>\n    <application/' android/app/src/main/AndroidManifest.xml
+          flutter pub get
+
+      - name: 1 - Code check
+        working-directory: plate_demo
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings lib test integration_test
+
+      - name: 2 - Logic tests
+        working-directory: plate_demo
+        run: flutter test test/
+
+      - name: 3 - Build release APK
+        working-directory: plate_demo
+        run: flutter build apk --release
+
+      - name: Enable emulator speed-up
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: 4 - Test on Android phone emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back emulated -camera-front none
+          disable-animations: true
+          working-directory: plate_demo
+          script: bash ci/run_device_tests.sh
+
+      - name: 5 - Publish APK (only if all tests passed)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: demo-${{ github.run_number }}
+          name: PlateAlert Tested ${{ github.run_number }}
+          files: plate_demo/build/app/outputs/flutter-apk/app-release.apk
