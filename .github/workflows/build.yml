@@ -10,15 +10,22 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Unzip project
+      - name: Unzip newest app code
         run: |
-          zipfile=$(ls src*.zip 2>/dev/null | head -1)
+          zipfile=""
+          for f in $(git log --diff-filter=AMR --format= --name-only -- 'src*.zip'); do
+            if [ -f "$f" ]; then zipfile="$f"; break; fi
+          done
+          if [ -z "$zipfile" ]; then zipfile=$(ls src*.zip 2>/dev/null | sort | tail -1); fi
           if [ -z "$zipfile" ]; then echo "No src zip uploaded yet"; exit 1; fi
           echo "Using $zipfile"
+          echo "### Built from: \`$zipfile\`" >> "$GITHUB_STEP_SUMMARY"
           rm -rf unzipped plate_demo && mkdir -p unzipped
           unzip -o "$zipfile" -d unzipped
           pub=$(find unzipped -name pubspec.yaml | head -1)
@@ -34,14 +41,9 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Add Android files
+      - name: Prepare Android project
         working-directory: plate_demo
-        run: |
-          flutter create --platforms=android --project-name plate_demo --org com.apexmobilelabs .
-          rm -f test/widget_test.dart
-          cp android_extras/proguard-rules.pro android/app/
-          sed -i '0,/<application/s//<uses-permission android:name="android.permission.CAMERA"\/>\n    <uses-permission android:name="android.permission.VIBRATE"\/>\n    <application/' android/app/src/main/AndroidManifest.xml
-          flutter pub get
+        run: bash ci/prepare.sh
 
       - name: 1 - Code check
         working-directory: plate_demo
