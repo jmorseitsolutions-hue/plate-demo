@@ -9,10 +9,11 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 80
+    # Pinned: GitHub moves "ubuntu-latest" to Ubuntu 26 from 19 Oct 2026.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -31,7 +32,7 @@ jobs:
           pub=$(find unzipped -name pubspec.yaml | head -1)
           mv "$(dirname "$pub")" plate_demo
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -43,18 +44,22 @@ jobs:
 
       - name: Prepare Android project
         working-directory: plate_demo
+        timeout-minutes: 15
         run: bash ci/prepare.sh
 
       - name: 1 - Code check
         working-directory: plate_demo
+        timeout-minutes: 10
         run: flutter analyze --no-fatal-infos --no-fatal-warnings lib test integration_test
 
       - name: 2 - Logic tests
         working-directory: plate_demo
+        timeout-minutes: 10
         run: flutter test test/
 
       - name: 3 - Build release APK
         working-directory: plate_demo
+        timeout-minutes: 25
         run: flutter build apk --release
 
       - name: Enable emulator speed-up
@@ -64,19 +69,21 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: 4 - Test on Android phone emulator
+        timeout-minutes: 45
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           arch: x86_64
           target: google_apis
+          emulator-boot-timeout: 900
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back emulated -camera-front none
           disable-animations: true
           working-directory: plate_demo
           script: bash ci/run_device_tests.sh
 
-      - name: 5 - Publish APK (only if all tests passed)
+      - name: 5 - Publish APK (only if no test failed)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: demo-${{ github.run_number }}
-          name: PlateAlert Tested ${{ github.run_number }}
+          name: PlateAlert Tested ${{ github.run_number }}${{ env.DEVICE_TEST == 'skipped' && ' (phone test skipped)' || '' }}
           files: plate_demo/build/app/outputs/flutter-apk/app-release.apk
