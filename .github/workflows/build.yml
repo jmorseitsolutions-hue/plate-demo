@@ -1,4 +1,5 @@
 name: Build APK
+# Every step posts its real errors as public annotations (ci/step.sh) so problems can be fixed without logs.
 
 on:
   push:
@@ -45,22 +46,22 @@ jobs:
       - name: Prepare Android project
         working-directory: plate_demo
         timeout-minutes: 15
-        run: bash ci/prepare.sh
+        run: bash ci/step.sh "Prepare" bash ci/prepare.sh
 
       - name: 1 - Code check
         working-directory: plate_demo
         timeout-minutes: 10
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings lib test integration_test
+        run: bash ci/step.sh "1 - Code check" flutter analyze --no-fatal-infos --no-fatal-warnings lib test integration_test
 
       - name: 2 - Logic tests
         working-directory: plate_demo
         timeout-minutes: 10
-        run: flutter test test/
+        run: bash ci/step.sh "2 - Logic tests" flutter test test/
 
       - name: 3 - Build release APK
         working-directory: plate_demo
         timeout-minutes: 25
-        run: flutter build apk --release
+        run: bash ci/step.sh "3 - Build APK" flutter build apk --release
 
       - name: Enable emulator speed-up
         run: |
