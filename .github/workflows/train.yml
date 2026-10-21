@@ -1,0 +1,88 @@
+name: Train plate model
+# Runs by itself every 6 hours (and when new training code is uploaded).
+# Results (model + scores) are saved on the "models" branch. Progress is posted as public notices.
+
+on:
+  schedule:
+    - cron: '17 1,7,13,19 * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - 'train*.zip'
+      - '.github/workflows/train.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plate-training
+  cancel-in-progress: false
+
+jobs:
+  train:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Unzip newest training code
+        run: |
+          zipfile=""
+          for f in $(git log --diff-filter=AMR --format= --name-only -- 'train*.zip'); do
+            if [ -f "$f" ]; then zipfile="$f"; break; fi
+          done
+          if [ -z "$zipfile" ]; then echo "::error title=Training::No train zip uploaded"; exit 1; fi
+          echo "Using $zipfile"
+          rm -rf trainer_unzip && mkdir trainer_unzip && unzip -q -o "$zipfile" -d trainer_unzip
+          dir=$(dirname "$(find trainer_unzip -name train.py | head -1)")
+          mv "$dir" trainer
+
+      - name: Get previous training results (models branch)
+        run: |
+          git config user.name "plate-trainer"
+          git config user.email "plate-trainer@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin models >/dev/null 2>&1; then
+            git fetch origin models
+            git worktree add models origin/models
+          else
+            git worktree add --detach models
+            (cd models && git checkout --orphan models-new && git rm -rf -q . || true)
+          fi
+          ls -la models
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: trainer/requirements.txt
+
+      - name: Install (pinned versions)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q fonts-dejavu-core fonts-dejavu-extra
+          bash trainer/step.sh "Install" pip install -r trainer/requirements.txt
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/plate_data
+          key: plate-data-62d190d4
+
+      - name: Train (up to 5 hours)
+        run: bash trainer/step.sh "Training" python trainer/train.py --models models --minutes 290
+
+      - name: Save results to the models branch
+        if: always()
+        run: |
+          cd models
+          rm -f best_weights.pt.tmp
+          git add -A
+          if git diff --cached --quiet; then echo "nothing new"; exit 0; fi
+          git -c user.name=plate-trainer -c user.email=plate-trainer@users.noreply.github.com \
+            commit -q -m "Training run ${{ github.run_number }}"
+          # keep the branch to ONE commit so it never grows big
+          git branch -D models-tmp >/dev/null 2>&1 || true
+          git checkout -q --orphan models-tmp
+          git -c user.name=plate-trainer -c user.email=plate-trainer@users.noreply.github.com \
+            commit -q -m "Plate model after run ${{ github.run_number }}"
+          git push -f origin HEAD:models
